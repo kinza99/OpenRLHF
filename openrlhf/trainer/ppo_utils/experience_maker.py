@@ -142,6 +142,7 @@ class NaiveExperienceMaker(ABC):
         strategy=None,
         remote_rm_url: Union[list[str], str] = None,
         reward_fn=None,
+        max_turns=1,
     ) -> None:
         super().__init__()
         self.actor = actor
@@ -156,9 +157,11 @@ class NaiveExperienceMaker(ABC):
         self.reward_fn = reward_fn
         self.perf_stats = None
         self.advantage_estimator = strategy.args.advantage_estimator
+        self.max_turns = max_turns
 
         # custom reward func for reinforced finetuning
         self.custom_reward_func = None
+        self.environment_func = None
         remote_rm_url = [remote_rm_url] if isinstance(remote_rm_url, str) else remote_rm_url
         if remote_rm_url and remote_rm_url[0].endswith(".py"):
             print(f"Loading custom `reward_func(queries, prompts, labels)` from {remote_rm_url[0]}")
@@ -168,7 +171,7 @@ class NaiveExperienceMaker(ABC):
             reward_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reward_module)
             self.custom_reward_func = reward_module.reward_func
-
+            self.environment_func = reward_module.environment_func
     # tokenizer
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
         if not padding:
@@ -554,6 +557,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         if self.custom_reward_func:
             self.custom_reward_func = ray.remote(self.custom_reward_func)
+        if self.environment_func:
+            self.environment_func = ray.remote(self.environment_func)
 
     @torch.no_grad()
     def make_experience_list(
@@ -584,6 +589,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         """
         if self.vllm_engines is None:
             return super().generate_samples(all_prompts, all_labels, **generate_kwargs)
+        if self.max_turns > 1:
+            return self._generate_vllm_multi_turn(all_prompts, all_labels, **generate_kwargs)
 
         # vLLM generation
         samples = self._generate_vllm(all_prompts, all_labels, **generate_kwargs)
@@ -604,7 +611,19 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         action_mask = samples.action_mask
         num_actions = samples.num_actions
         packed_seq_lens = samples.packed_seq_lens
-
+        
+        def find_response_length(lst):
+            count = 0
+            for i in range(len(lst)-1, -1, -1):
+                if lst[i] == 0:
+                    count += 1
+                    if count == 2:
+                        return sum(lst[i:])
+            return sum(lst)
+            
+        final_response_length = [] if action_mask is not None else num_actions
+        for m in action_mask:
+            final_response_length.append(find_response_length(m))
         start = time.time()
         sequences_cpu, attention_mask_cpu = (
             sequences.to("cpu"),
@@ -614,7 +633,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # init log probs
         if self.initial_model is not None:
             base_action_log_probs_ref = self.initial_model.forward.remote(
-                sequences_cpu, num_actions, attention_mask_cpu, logps_allgather=True, packed_seq_lens=packed_seq_lens
+                sequences_cpu, num_actions, attention_mask_cpu, logps_allgather=True, packed_seq_lens=packed_seq_lens, action_mask=action_mask
             )
 
             if args.colocate_actor_ref or args.colocate_all_models:
@@ -626,7 +645,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         # values
         if self.critic is not None:
             value_ref = self.critic.forward.remote(
-                sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens
+                sequences_cpu, num_actions, attention_mask_cpu, packed_seq_lens=packed_seq_lens, action_mask=action_mask
             )
             # avoid CUDA OOM when colocate models
             if args.colocate_critic_reward or args.colocate_all_models:
@@ -652,15 +671,17 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     queries = self.tokenizer.batch_decode(sequences_cpu, skip_special_tokens=False)
                 else:
                     sequences_list = []
+                    response_list = []
                     offset = 0
                     tokens_list = sequences_cpu.tolist()[0]
-                    for length in packed_seq_lens:
+                    for final_len, length in zip(final_response_length, packed_seq_lens):
                         sequences_list.append(tokens_list[offset : offset + length])
+                        response_list.append(tokens_list[offset + length - final_len - 1 : offset + length - 1])
                         offset += length
                     queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
-
+                    responses = self.tokenizer.batch_decode(response_list, skip_special_tokens=False)
                 if self.custom_reward_func:
-                    r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels)
+                    r = self.custom_reward_func.remote(queries, responses, samples.labels)
                     r_refs.append(r)
                 else:
                     for rm in self.remote_rm_url:
@@ -683,6 +704,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             ring_attn_group=self.strategy.ring_attn_group,
             logps_allgather=True,
             packed_seq_lens=packed_seq_lens,
+            action_mask=action_mask,
         )
         actor_value_rm_time = time.time() - start
 
@@ -717,6 +739,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
+        action_mask = None
+        
         if (self.initial_model is not None) and (not args.use_kl_loss):
             kl = compute_approx_kl(
                 action_log_probs,
@@ -811,12 +835,22 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             skip_special_tokens=kwargs.get("skip_special_tokens", False),
             include_stop_str_in_output=True,
         )
-
-        # Expand prompt list based on the number of samples per prompt
-        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
-        all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
-
+        if "n_samples_per_prompt" in kwargs:
+            all_prompts = sum([[prompt] * kwargs["n_samples_per_prompt"] for prompt in all_prompts], [])
+            all_labels = sum([[label] * kwargs["n_samples_per_prompt"] for label in all_labels], [])
+        else:
+            # Expand prompt list based on the number of samples per prompt
+            all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+            all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
+        if "active_turn_tags" in kwargs:
+            active_turn_tags = kwargs["active_turn_tags"]
+        else:
+            active_turn_tags = [True] * len(all_prompts)
+        if isinstance(all_prompts[0], str):
+            all_prompt_token_ids = self.tokenize_fn(all_prompts, self.prompt_max_len, padding=False)["input_ids"]
+        else:
+            all_prompt_token_ids = all_prompts
+    
         # Distribute requests to engines and collect responses to outputs
         refs = []
         batch_size = (len(all_prompt_token_ids) + len(llms) - 1) // len(llms)
@@ -843,6 +877,9 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         for i in range(0, len(all_outputs), args.micro_rollout_batch_size):
             outputs = all_outputs[i : i + self.strategy.args.micro_rollout_batch_size]
             prompts = all_prompts[i : i + self.strategy.args.micro_rollout_batch_size]
+            split_active_turn_tags = active_turn_tags[i : i + self.strategy.args.micro_rollout_batch_size]
+            if not isinstance(prompts[0], str):
+                prompts = self.tokenizer.batch_decode(prompts, skip_special_tokens=False)
             labels = all_labels[i : i + self.strategy.args.micro_rollout_batch_size]
             if not self.packing_samples:
                 # NOTE: concat all outputs to following format:
@@ -901,16 +938,27 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 packed_seq_lens = []
                 attention_mask = []
                 num_actions = []
+                max_token_id = self.tokenizer.vocab_size + len(self.tokenizer.added_tokens_encoder) - 1
                 for i, output in enumerate(outputs):
                     input_len = len(output.prompt_token_ids)
-                    output_len = len(output.outputs[0].token_ids)
-                    packed_seq_lens.append(input_len + output_len)
-                    sequences.extend(output.prompt_token_ids + list(output.outputs[0].token_ids))
-                    attention_mask.extend([i + 1] * (input_len + output_len))
+                    token_ids = list(output.outputs[0].token_ids)
+                    if max(token_ids) > max_token_id:
+                        token_ids = [x for x in list(output.outputs[0].token_ids) if x <= max_token_id]
+                    if not split_active_turn_tags[i]:
+                        output_len = 0
+                        sequences.extend(output.prompt_token_ids)
+                        attention_mask.extend([i + 1] * (input_len))
+                        num_actions.append(0)
+                    else:
+                        output_len = len(token_ids)
+                        sequences.extend(output.prompt_token_ids + token_ids)
+                        attention_mask.extend([i + 1] * (input_len + output_len))
 
-                    # current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
-                    # num_actions.append(max(1, sum(current_action_mask)))
-                    num_actions.append(max(1, output_len))
+                        # current_action_mask = [0] * (input_len - 1) + [1] * output_len + [0]
+                        # num_actions.append(max(1, sum(current_action_mask)))
+                        num_actions.append(max(1, output_len))
+                    packed_seq_lens.append(input_len + output_len)
+                    
 
                 # pad seq makes the sequence a multiple of ring_attention_size.
                 pad_len = None
@@ -944,6 +992,140 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     )
                 )
         return samples_list
+    
+    def _generate_vllm_multi_turn(self, all_prompts: List[str], all_labels, **kwargs) -> List[Samples]:
+        args = self.strategy.args
+        max_turns = self.max_turns
+        all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
+        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
+        prompts = all_prompts
+        samples_list = []
+        active_turn_tags = [True] * len(prompts)
+
+        def num_actions_to_action_mask(num_actions, packed_seq_lens):
+            action_mask = []
+            for num_action, seq_len in zip(num_actions, packed_seq_lens):
+                start, end = max(0, seq_len - num_action - 1), seq_len - 1
+                seq = [0] * (seq_len)
+                seq[start:end] = [1] * (end - start)
+                action_mask.append(seq)
+                assert sum(seq) == num_action
+            return action_mask
+        
+        
+        for t in tqdm(range(max_turns)):
+            
+            pbar = tqdm(
+                range(len(prompts)),
+                desc=f"Turn [{t + 1}/{max_turns}]",
+                disable=not self.strategy.is_rank_0(),
+            )
+            
+            if t == 0:                
+                samples_list = self._generate_vllm(prompts, all_labels, n_samples_per_prompt=1, **kwargs)
+                for sample in samples_list:
+                    if sample.action_mask is None:
+                        action_mask = num_actions_to_action_mask(sample.num_actions, sample.packed_seq_lens)
+                    sample.action_mask = action_mask
+            else:
+                new_prompts = []
+                all_sequences = []
+            
+                activate_sequences = []
+                activate_responses = []
+                activate_labels = []
+                
+                observations = []
+                for index, samples in enumerate(samples_list):
+                    sequences_tensor = samples.sequences
+                    packed_seq_lens = samples.packed_seq_lens
+                    response_lens = [int(i) for i in samples.response_length.tolist()]
+                    sequences_cpu = sequences_tensor.to("cpu")
+                    offset = 0
+                    tokens_list = sequences_cpu.tolist()[0]
+
+                    split_labels = all_labels[index*len(packed_seq_lens): (index+1)*len(packed_seq_lens)]
+                    split_active_turn_tags = active_turn_tags[index*len(packed_seq_lens): (index+1)*len(packed_seq_lens)]
+                    
+                    for idx, (length, response_length) in enumerate(zip(packed_seq_lens, response_lens)):
+                        if split_active_turn_tags[idx]:
+                            activate_sequences.append(tokens_list[offset : offset + length])
+                            activate_responses.append(tokens_list[offset + length - response_length: offset + length - 1])
+                            activate_labels.append(split_labels[idx])
+                        all_sequences.append(tokens_list[offset : offset + length])
+                        offset += length
+                activate_sequences = self.tokenizer.batch_decode(activate_sequences, skip_special_tokens=False)
+                activate_responses = self.tokenizer.batch_decode(activate_responses, skip_special_tokens=False)
+
+                o = self.environment_func.remote(activate_sequences, activate_responses, activate_labels)
+                observations.extend(ray.get(o))
+                
+                # def longest_common_prefix_length(list1, list2):
+                #     # 获取较短列表的长度
+                #     min_len = min(len(list1), len(list2))
+                    
+                #     # 计数相同的前缀元素
+                #     count = 0
+                #     for i in range(min_len):
+                #         if list1[i] == list2[i]:
+                #             count += 1
+                #         else:
+                #             break
+                            
+                #     return count
+                obs_pos = 0
+                for active_turn_index in range(len(active_turn_tags)):
+                    if active_turn_tags[active_turn_index] is True:
+                        if observations[obs_pos] is not None:
+                            eos_token_id = self.tokenizer.eos_token_id
+                            next_turn = self.tokenizer.apply_chat_template([{"role": "user", "content": observations[obs_pos]}], tokenize=True, add_generation_prompt=True)
+                            first_eos_index = next_turn.index(eos_token_id)
+                            next_chat = next_turn[first_eos_index + 1:]
+                            prompt = all_sequences[active_turn_index] + next_chat
+                            new_prompts.append(prompt)
+                        else:
+                            new_prompts.append(all_sequences[active_turn_index])
+                            active_turn_tags[active_turn_index] = False
+                        obs_pos += 1
+                    else:
+                        new_prompts.append(all_sequences[active_turn_index])
+                # active_turn_tags_this_turn = [i for i, x in enumerate(active_turn_tags) if x is True]
+                # for obs, active_turn_index in zip(observations, active_turn_tags_this_turn):
+                #     if obs is None:
+                #         active_turn_tags[active_turn_index] = False
+                #         prompt = all_sequences[active_turn_index]
+                #     else:
+                #         eos_token_id = self.tokenizer.eos_token_id
+                #         next_turn = self.tokenizer.apply_chat_template([{"role": "user", "content": obs}], tokenize=True, add_generation_prompt=True)
+                #         first_eos_index = next_turn.index(eos_token_id)
+                #         next_chat = next_turn[first_eos_index + 1:]
+                #         prompt = all_sequences[active_turn_index] + next_chat
+                #     new_prompts.append(prompt)
+
+                prompts = new_prompts
+                
+                tmp_samples_list = self._generate_vllm(prompts, all_labels, n_samples_per_prompt=1, active_turn_tags=active_turn_tags, **kwargs)
+                for index, sample in enumerate(tmp_samples_list):
+                    samples_list[index].sequences = sample.sequences
+                    samples_list[index].total_length = sample.total_length
+                    samples_list[index].response_length += sample.response_length
+                    samples_list[index].attention_mask = sample.attention_mask
+                    samples_list[index].pad_len = sample.pad_len
+                    samples_list[index].prompts = sample.prompts
+                    new_num_actions = []
+                    for x, y in zip(sample.num_actions, samples_list[index].num_actions):
+                        new_num_actions.append(x+y)
+                    samples_list[index].num_actions = new_num_actions
+                    sample.action_mask = num_actions_to_action_mask(sample.num_actions, sample.packed_seq_lens)
+                    old_total_length = samples_list[index].packed_seq_lens
+                    for id, ol in enumerate(old_total_length):
+                        sample.action_mask[id][:ol] = samples_list[index].action_mask[id][:ol]
+                    samples_list[index].action_mask = sample.action_mask
+                    samples_list[index].packed_seq_lens = sample.packed_seq_lens
+                    
+            pbar.update(len(prompts))
+        return samples_list
+
 
     def flush(self):
         "Ensure all experience has been send to critic"

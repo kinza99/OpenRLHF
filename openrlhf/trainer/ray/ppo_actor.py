@@ -57,6 +57,7 @@ class ActorPPOTrainer(PPOTrainer):
             self.reward_fn,
             vllm_engines=self.vllm_engines,
             packing_samples=self.strategy.args.packing_samples,
+            max_turns=self.generate_kwargs.get("max_turns", 1),
         )
 
         backend = getattr(self.strategy.args, "vllm_sync_backend", "nccl")
@@ -399,6 +400,7 @@ class ActorModelRayActor(BasePPORole):
             return_eval=False,
             train_split=args.prompt_split,
         )
+        # breakpoint()
         prompts_data = prompts_data.select(range(min(args.max_samples, len(prompts_data))))
         self.prompts_dataset = PromptDataset(
             prompts_data, self.tokenizer, strategy, input_template=args.input_template
@@ -506,8 +508,9 @@ class ActorModelRayActor(BasePPORole):
             eos_token_id=self.tokenizer.eos_token_id,
             save_hf_ckpt=args.save_hf_ckpt,
             disable_ds_ckpt=args.disable_ds_ckpt,
+            max_turns=args.max_turns,
         )
-
+        # breakpoint()
         # broadcast checkpoint
         ckpt_path = os.path.join(args.ckpt_path, "_actor")
         if args.load_checkpoint and os.path.exists(ckpt_path) and not vllm_engines is None:

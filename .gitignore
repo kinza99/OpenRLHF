@@ -136,7 +136,10 @@ dmypy.json
 # macos
 *.DS_Store
 #data/
-
+data/
+utils/
+wandb/
+models/
 docs/.build
 
 # pytorch checkpoint

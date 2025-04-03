@@ -203,6 +203,7 @@ class Actor(nn.Module):
         ring_attn_group: Optional[dist.ProcessGroup] = None,
         logps_allgather=False,
         packed_seq_lens: Optional[list[int]] = None,
+        action_mask: Optional[list[list[int]]] = None,
     ) -> torch.Tensor:
         """Returns action log probs"""
         if not self.packing_samples:
@@ -225,10 +226,30 @@ class Actor(nn.Module):
         # https://github.com/OpenRLHF/OpenRLHF/pull/634
         output["logits"] = output["logits"].to(torch.float32)
 
-        if num_actions is None:
+        if num_actions is None and action_mask is None:
             assert return_output
             return output
-
+        
+        if num_actions is not None and action_mask is not None:
+            log_probs = log_probs_from_logits(
+                    output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature
+                )
+            action_log_probs = []
+            offset = 0
+            for i, (mask, seq_len) in enumerate(zip(action_mask, packed_seq_lens)):
+                x = 0
+                for pos, m in enumerate(mask):
+                    if m == 1:
+                        action_log_probs.append(log_probs[:, offset+pos])
+                        x += 1
+                assert x == num_actions[i]
+                offset += seq_len
+            action_log_probs = torch.cat(action_log_probs)
+            if return_output:
+                return (action_log_probs, output)
+            else:
+                return action_log_probs
+        
         if not self.packing_samples:
             log_probs = log_probs_from_logits(
                 output["logits"][:, :-1, :], sequences[:, 1:], temperature=self.temperature

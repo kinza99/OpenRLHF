@@ -295,6 +295,7 @@ if __name__ == "__main__":
     parser.add_argument("--lora_dropout", type=float, default=0)
 
     # PPO
+    parser.add_argument("--max_turns", type=int, default=1)
     parser.add_argument("--save_path", type=str, default="./ckpt")
     parser.add_argument("--num_episodes", type=int, default=1)
     parser.add_argument("--rollout_batch_size", type=int, default=1024)

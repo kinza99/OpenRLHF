@@ -266,6 +266,7 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             ring_attn_group=None,
             values_allgather=False,
             packed_seq_lens=None,
+            action_mask: Optional[list[list[int]]] = None,
         ) -> torch.Tensor:
             if not self.packing_samples:
                 # https://github.com/OpenRLHF/OpenRLHF/issues/217
@@ -295,9 +296,24 @@ def _get_critic_model(base_pretrained_model, base_llm_model, value_head_prefix="
             if self.normalize_reward:
                 values = (values - self.mean) / self.std
 
-            if num_actions is None:
+            if num_actions is None and action_mask is None:
                 assert return_output
                 return outputs
+            
+            if num_actions is not None and action_mask is not None:
+                action_values = []
+                offset = 0
+                for mask, seq_len in zip(action_mask, packed_seq_lens):
+                    for pos, m in enumerate(mask):
+                        if m == 1:
+                            action_values.append(values[:, offset+pos])
+                    offset += seq_len
+                action_values = torch.cat(action_values)
+                if return_output:
+                    return (action_values, values)
+                else:
+                    return action_values
+        
 
             if not self.packing_samples:
                 action_values = values[:, -num_actions:]
