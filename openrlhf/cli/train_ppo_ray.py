@@ -422,6 +422,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_ms", action="store_true", default=False)
 
     args = parser.parse_args()
+    args.wandb_run_name = f"{args.advantage_estimator}_max_turns{args.max_turns}_lr{args.actor_learning_rate}_num_episodes{args.num_episodes}"
 
     if args.advantage_estimator not in ["gae"]:
         args.critic_pretrain = None

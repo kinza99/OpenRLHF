@@ -15,6 +15,7 @@ games_lock = Lock()
 
 class StartGameRequest(BaseModel):
     game_file: str
+    game_id: str
     max_steps: int = 20
 
 class StepRequest(BaseModel):
@@ -27,18 +28,21 @@ def start_game(request: StartGameRequest):
         env_id = textworld.gym.register_game(request.game_file, max_episode_steps=request.max_steps)
         env = textworld.gym.make(env_id)
         obs, infos = env.reset()
-        game_id = str(uuid.uuid4())
-
-        games[game_id] = {
+        # game_id = str(uuid.uuid4())
+        game_id=request.game_id
+        print(f"game_id:{game_id}")
+        ret={"game_id": game_id, "observation": obs}
+        games[request.game_id] = {
             "env": env,
             "obs": obs,
             "infos": infos,
             "score": 0,
             "moves": 0,
-            "done": False
+            "done": False,
+            "history": [f"Initial observation: {obs}"]
         }
 
-    return {"game_id": game_id, "observation": obs}
+    return ret
 
 def capture_render_output(env):
     # 使用 StringIO 捕获 render 输出
@@ -65,16 +69,19 @@ def step(request: StepRequest):
         game["score"] = score
         game["moves"] += 1
         game["done"] = done
+        game["history"].append(f"My input: {request.command}")
 
         # 获取 render 输出
         render_output = capture_render_output(game["env"])
+        game["history"].append(f"Game feedback: {render_output}")
 
     return {
         "observation": obs,
         "score": score,
         "done": done,
         "moves": game["moves"],
-        "render": render_output
+        "render": render_output,
+        "history": game["history"]  # 返回历史记录
     }
 
 @app.post("/close")
@@ -87,3 +94,16 @@ def close_game(game_id: str):
         else:
             raise HTTPException(status_code=404, detail="Game not found.")
 
+@app.post("/get_status")
+def get_status(game_id: str):
+    with games_lock:
+        if game_id not in games:
+            raise HTTPException(status_code=404, detail="Game not found.")
+
+        game = games[game_id]
+    return {
+        "score": game["score"],
+        "done": game["done"],
+        "moves": game["moves"],
+        "history": game["history"]
+    }

@@ -3,7 +3,7 @@ from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
-
+import json
 import ray
 import torch
 import torch.distributed as dist
@@ -620,10 +620,13 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     if count == 2:
                         return sum(lst[i:])
             return sum(lst)
-            
-        final_response_length = [] if action_mask is not None else num_actions
-        for m in action_mask:
-            final_response_length.append(find_response_length(m))
+        if action_mask is not None:
+            final_response_length = []
+            for m in action_mask:
+                final_response_length.append(find_response_length(m))
+        else:
+            final_response_length = num_actions
+
         start = time.time()
         sequences_cpu, attention_mask_cpu = (
             sequences.to("cpu"),
@@ -997,7 +1000,23 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         args = self.strategy.args
         max_turns = self.max_turns
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
-        all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
+        labels = []
+        for label in all_labels:
+            labels_json = json.loads(label)
+            name = labels_json['dataset']
+            if name == 'textworld':
+                for i in range(args.n_samples_per_prompt):
+                    tmp_label = deepcopy(labels_json)
+                    tmp_label['game_id'] = f"game_{len(labels)}"
+                    labels.append(json.dumps(tmp_label))
+            elif name == 'appworld':
+                for i in range(args.n_samples_per_prompt):
+                    tmp_label = deepcopy(labels_json)
+                    tmp_label['experiment_name'] = f"{labels_json['task_id']}_{i}"
+                    labels.append(json.dumps(tmp_label))
+            else:
+                labels.extend([label] * args.n_samples_per_prompt)
+        all_labels = labels
         prompts = all_prompts
         samples_list = []
         active_turn_tags = [True] * len(prompts)
