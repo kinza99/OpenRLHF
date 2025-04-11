@@ -7,6 +7,9 @@ set -x
 #    --runtime-env-json='{"working_dir": "/cpfs01/user/duhe/OpenRLHF"}' \
 #    -- 
    # --colocate_actor_ref \
+
+# uvicorn text_world_env.game_server_mod:app --host 0.0.0.0 --port 8001 & ;
+
 python3 -m openrlhf.cli.train_ppo_ray \
    --ref_num_nodes 1 \
    --ref_num_gpus_per_node 1 \
@@ -18,8 +21,8 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_tensor_parallel_size 1 \
    --vllm_enable_sleep \
    --pretrain /cpfs01/shared/llm_ddd/puyu_transfer_data/guohonglin/hf_hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/bb46c15ee4bb56c5b63245ef50fd7637234d6f75_no_yarn \
-   --remote_rm_url ./env_reward/env_reward.py \
-   --save_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-grpo-bird-max-turns-2-test \
+   --remote_rm_url ./text_world_env/api_call_mod.py \
+   --save_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-grpo-textworld-max-turns-20 \
    --micro_train_batch_size 4 \
    --train_batch_size 16 \
    --micro_rollout_batch_size 4 \
@@ -28,7 +31,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --n_samples_per_prompt 8 \
    --max_epochs 1 \
    --prompt_max_len 31744 \
-   --max_samples 32 \
+   --max_samples 100000 \
    --generate_max_len 1024 \
    --init_kl_coef 1e-3 \
    --gamma 1.0 \
@@ -38,7 +41,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --zero_stage 3 \
    --bf16 \
    --actor_learning_rate 5e-7 \
-   --prompt_data data/bird_train.jsonl \
+   --prompt_data data/textworld.jsonl \
    --input_key message \
    --label_key label \
    --apply_chat_template \
@@ -47,10 +50,13 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --gradient_checkpointing \
    --packing_samples \
    --save_steps -1 \
-   --max_turns 2 \
+   --max_turns 20 \
    --adam_offload \
    --overlap_comm \
-   --num_episodes 1
+   --use_wandb b2235b6e414a6ebd3ff7fa3162fbce411a42b5ad \
+   --wandb_project qwen2-5-7b-instruct-textworld \
+   --num_episodes 50 \
+   --flash_attn
 # You could also try
 #   --kl_estimator k2 \
 

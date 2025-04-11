@@ -150,18 +150,24 @@ def reward_func(queries, responses, labels):
         db_paths.append(db_path)
         pre_sqls.append(predicted_sql)
         gold_sqls.append(label)
-        
-    pre_refs = [_execute_with_timeout.remote(db, sql) for db, sql in zip(db_paths, pre_sqls)]
-    gold_refs = [_execute_with_timeout.remote(db, sql) for db, sql in zip(db_paths, gold_sqls)]
-    ready_pre_refs, pending_pre_refs = ray.wait(pre_refs, num_returns=len(pre_refs), timeout=60.0)
-    ready_gold_refs, pending_gold_refs = ray.wait(gold_refs, num_returns=len(gold_refs), timeout=60.0)
-    for i in range(len(pre_refs)):
-        if pre_refs[i] in ready_pre_refs and gold_refs[i] in ready_gold_refs:
-            pre_result = ray.get(pre_refs[i])
-            gold_result = ray.get(gold_refs[i])
-            rewards.append(reward_consist(pre_result, gold_result))
-        else:
-            rewards.append(0)
+    
+    try:
+        pre_refs = [_execute_with_timeout.remote(db, sql) for db, sql in zip(db_paths, pre_sqls)]
+        gold_refs = [_execute_with_timeout.remote(db, sql) for db, sql in zip(db_paths, gold_sqls)]
+        ready_pre_refs, pending_pre_refs = ray.wait(pre_refs, num_returns=len(pre_refs), timeout=60.0)
+        ready_gold_refs, pending_gold_refs = ray.wait(gold_refs, num_returns=len(gold_refs), timeout=60.0)
+        for i in range(len(pre_refs)):
+            if pre_refs[i] in ready_pre_refs and gold_refs[i] in ready_gold_refs:
+                pre_result = ray.get(pre_refs[i])
+                gold_result = ray.get(gold_refs[i])
+                rewards.append(reward_consist(pre_result, gold_result))
+            else:
+                rewards.append(0)
+    finally:
+        for ref in pre_refs:
+            ray.cancel(ref, force=True)
+        for ref in gold_refs:
+            ray.cancel(ref, force=True)
     return torch.tensor(rewards).to(torch.float32)
 
 def environment_func(queries, responses, labels):
@@ -175,19 +181,23 @@ def environment_func(queries, responses, labels):
         predicted_sql = post_process(response)
         db_paths.append(db_path)
         pre_sqls.append(predicted_sql)
-    pre_refs = [_execute_with_timeout.remote(db, sql) for db, sql in zip(db_paths, pre_sqls)]
-    ready_refs, pending_refs = ray.wait(pre_refs, num_returns=len(pre_refs), timeout=60.0)
-    pre_results = []
-    for r in pre_refs:
-        if r in ready_refs:
-            pre_results.append(ray.get(r))
-        else:
-            pre_results.append("Error: Query execution timed out after seconds")
-    for pre_result in pre_results:
-        if isinstance(pre_result, str) and 'Error' in pre_result:
-            obs.append(pre_result)
-        else:
-            obs.append(None)
+    try:
+        pre_refs = [_execute_with_timeout.remote(db, sql) for db, sql in zip(db_paths, pre_sqls)]
+        ready_refs, pending_refs = ray.wait(pre_refs, num_returns=len(pre_refs), timeout=60.0)
+        pre_results = []
+        for r in pre_refs:
+            if r in ready_refs:
+                pre_results.append(ray.get(r))
+            else:
+                pre_results.append("Error: Query execution timed out after seconds")
+        for pre_result in pre_results:
+            if isinstance(pre_result, str) and 'Error' in pre_result:
+                obs.append(pre_result)
+            else:
+                obs.append(None)
+    finally:
+        for ref in pre_refs:
+            ray.cancel(ref, force=True)
     end_time = time.time()
     print(f"环境函数执行时间: {end_time - start_time:.4f} 秒")
     return obs

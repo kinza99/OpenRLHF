@@ -266,14 +266,14 @@ class NaiveExperienceMaker(ABC):
                 experience.advantages, experience.returns = self.get_advantages_and_returns(
                     experience.values,
                     reward,
-                    experience.action_mask,
+                    experience.action_mask if experience.action_mask is not None and num_actions is None else None,
                     generate_kwargs["gamma"],
                     generate_kwargs["lambd"],
                 )
             elif self.advantage_estimator in ["reinforce", "rloo", "reinforce_baseline", "group_norm"]:
                 experience.returns = self.get_cumulative_returns(
                     reward,
-                    experience.action_mask,
+                    experience.action_mask if experience.action_mask is not None and num_actions is None else None,
                     generate_kwargs["gamma"],
                 )
                 experience.advantages = deepcopy(experience.returns)
@@ -291,6 +291,8 @@ class NaiveExperienceMaker(ABC):
             # remove unnecessary info
             experience.kl = None
             del experience.info["num_actions"]
+            if experience.action_mask is not None and isinstance(experience.action_mask, list):
+                experience.action_mask = [torch.tensor(mask, device=torch.cuda.current_device()) if isinstance(mask, list) else mask for mask in experience.action_mask]
             experience.to_device("cpu")
         return experiences
 
@@ -620,7 +622,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     if count == 2:
                         return sum(lst[i:])
             return sum(lst)
-        if action_mask is not None:
+        if action_mask is not None and num_actions is not None:
             final_response_length = []
             for m in action_mask:
                 final_response_length.append(find_response_length(m))
@@ -741,14 +743,12 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if args.colocate_actor_ref or args.colocate_all_models:
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
-
-        action_mask = None
         
         if (self.initial_model is not None) and (not args.use_kl_loss):
             kl = compute_approx_kl(
                 action_log_probs,
                 base_action_log_probs,
-                action_mask=action_mask,
+                action_mask=action_mask if action_mask is not None and num_actions is None else None,
                 kl_estimator=self.strategy.args.kl_estimator,
             )
         else:
@@ -1003,7 +1003,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         labels = []
         for label in all_labels:
             labels_json = json.loads(label)
-            name = labels_json['dataset']
+            name = labels_json.get('dataset', None)
             if name == 'textworld':
                 for i in range(args.n_samples_per_prompt):
                     tmp_label = deepcopy(labels_json)

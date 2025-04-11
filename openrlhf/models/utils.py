@@ -62,7 +62,7 @@ def compute_reward(
     if reward_clip_range:
         r = r.clamp(min=reward_clip_range[0], max=reward_clip_range[1])
 
-    if action_mask is not None:
+    if action_mask is not None and num_actions is None:
         kl_reward = -kl_coef * kl
         # The following code is equivalent to:
         #

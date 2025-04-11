@@ -373,6 +373,7 @@ class PPOTrainer(ABC):
             ring_attn_group=self.strategy.ring_attn_group,
             logps_allgather=True,
             packed_seq_lens=packed_seq_lens,
+            action_mask=experience.action_mask
         )
         # unpad sequence ensures that pad tokens do not contribute to the loss calculation.
         if self.strategy.ring_attn_group is not None:
@@ -392,7 +393,7 @@ class PPOTrainer(ABC):
             action_log_probs,
             old_action_log_probs,
             advantages,
-            action_mask=experience.action_mask,
+            action_mask=experience.action_mask if experience.action_mask is not None and num_actions is None else None
         )
 
         if self.args.use_kl_loss:
@@ -400,7 +401,7 @@ class PPOTrainer(ABC):
                 kl = compute_approx_kl(
                     action_log_probs,
                     base_action_log_probs,
-                    experience.action_mask,
+                    experience.action_mask if experience.action_mask is not None and num_actions is None else None,
                     kl_estimator=self.args.kl_estimator,
                 )
             else:
@@ -505,6 +506,7 @@ class PPOTrainer(ABC):
             ring_attn_group=self.strategy.ring_attn_group,
             values_allgather=True,
             packed_seq_lens=packed_seq_lens,
+            action_mask=experience.action_mask
         )
         # unpad sequence ensures that pad tokens do not contribute to the loss calculation
         if self.strategy.ring_attn_group is not None:
@@ -524,7 +526,7 @@ class PPOTrainer(ABC):
             values,
             old_values,
             returns,
-            action_mask=experience.action_mask,
+            action_mask=experience.action_mask if experience.action_mask is not None and num_actions is None else None
         )
         # mixtral
         if self.aux_loss:

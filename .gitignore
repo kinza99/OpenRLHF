@@ -135,7 +135,7 @@ dmypy.json
 
 # macos
 *.DS_Store
-#data/
+ckpt/
 data/
 utils/
 wandb/

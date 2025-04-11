@@ -19,9 +19,11 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_enable_sleep \
    --pretrain /cpfs01/shared/llm_ddd/puyu_transfer_data/guohonglin/hf_hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/bb46c15ee4bb56c5b63245ef50fd7637234d6f75_no_yarn \
    --remote_rm_url ./env_reward/env_reward.py \
-   --save_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-grpo \
+   --save_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-bird-grpo-max-turns-1  \
+   --save_hf_ckpt \
+   --ckpt_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-bird-grpo-max-turns-1/ckpts \
    --micro_train_batch_size 2 \
-   --train_batch_size 64 \
+   --train_batch_size 256 \
    --micro_rollout_batch_size 4 \
    --rollout_batch_size 128 \
    --enable_prefix_caching \
@@ -51,8 +53,12 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --adam_offload \
    --overlap_comm \
    --use_wandb b2235b6e414a6ebd3ff7fa3162fbce411a42b5ad \
-   --wandb_project qwen2-5-7b-instruct-grpo-bird-max_turns3 \
-   --num_episodes 5
+   --wandb_project qwen2-5-7b-instruct-grpo-bird\
+   --num_episodes 5 \
+   --grad_accum_dtype bf16 \
+   --flash_attn \
+   --gradient_checkpointing_use_reentrant \
+
 # You could also try
 #   --kl_estimator k2 \
 

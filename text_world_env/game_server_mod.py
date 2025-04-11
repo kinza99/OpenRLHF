@@ -53,11 +53,18 @@ def capture_render_output(env):
     sys.stdout = old_stdout  # 恢复标准输出
     return output
 
+@app.post("/check")
+def check(game_id: str):
+    if game_id not in games:
+        return {'exist':False}
+    return {'exist':True}
+
 @app.post("/step")
 def step(request: StepRequest):
     with games_lock:
         if request.game_id not in games:
             raise HTTPException(status_code=404, detail="Game not found.")
+            # start_game(request: StartGameRequest)
 
         game = games[request.game_id]
 

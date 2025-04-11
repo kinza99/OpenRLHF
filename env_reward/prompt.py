@@ -267,13 +267,14 @@ if __name__ == '__main__':
             if i == 0:
                 print(content)
             i += 1
-            line = json.dumps({'question': question, 'label':json.dumps({'db_path': db_path, 'knowledge': knowledge, 'ground_truth': data['SQL']}), 'message': [
-                               {
-                                   'role': 'user',
-                                   'content': content
-                               }
-                               ]})
-            f.write(line + '\n')
+            break
+            # line = json.dumps({'question': question, 'label':json.dumps({'db_path': db_path, 'knowledge': knowledge, 'ground_truth': data['SQL']}), 'message': [
+            #                    {
+            #                        'role': 'user',
+            #                        'content': content
+            #                    }
+            #                    ]})
+            # f.write(line + '\n')
     # if args.use_knowledge == 'True':
     #     responses = collect_response_from_gpt(db_path_list=db_path_list, question_list=question_list, api_key=args.api_key, engine=args.engine, knowledge_list=knowledge_list)
     # else:

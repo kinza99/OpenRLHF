@@ -203,7 +203,7 @@ class Actor(nn.Module):
         ring_attn_group: Optional[dist.ProcessGroup] = None,
         logps_allgather=False,
         packed_seq_lens: Optional[list[int]] = None,
-        action_mask: Optional[list[list[int]]] = None,
+        action_mask = None,
     ) -> torch.Tensor:
         """Returns action log probs"""
         if not self.packing_samples:
