@@ -21,7 +21,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_tensor_parallel_size 1 \
    --vllm_enable_sleep \
    --pretrain /cpfs01/shared/llm_ddd/puyu_transfer_data/guohonglin/hf_hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/bb46c15ee4bb56c5b63245ef50fd7637234d6f75_no_yarn \
-   --remote_rm_url ./appworld_env/exe_reward_mod.py \
+   --remote_rm_url ./appworld_env/play_ori.py \
    --save_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-grpo-appworld-max-turns-50 \
    --micro_train_batch_size 4 \
    --train_batch_size 16 \

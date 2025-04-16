@@ -19,9 +19,9 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --vllm_enable_sleep \
    --pretrain /cpfs01/shared/llm_ddd/puyu_transfer_data/guohonglin/hf_hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/bb46c15ee4bb56c5b63245ef50fd7637234d6f75_no_yarn \
    --remote_rm_url ./env_reward/env_reward.py \
-   --save_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-bird-grpo-max-turns-1  \
+   --save_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-bird-grpo-max-turns-1-lr-1e-6  \
    --save_hf_ckpt \
-   --ckpt_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-bird-grpo-max-turns-1/ckpts \
+   --ckpt_path /cpfs01/shared/llm_code/duhe/agent_rl_models/qwen2-5-7b-instruct-bird-grpo-max-turns-1-lr-1e-6/ckpts \
    --micro_train_batch_size 2 \
    --train_batch_size 256 \
    --micro_rollout_batch_size 4 \
@@ -39,7 +39,7 @@ python3 -m openrlhf.cli.train_ppo_ray \
    --advantage_estimator group_norm \
    --zero_stage 3 \
    --bf16 \
-   --actor_learning_rate 1e-7 \
+   --actor_learning_rate 1e-6 \
    --prompt_data data/bird_train.jsonl \
    --input_key message \
    --label_key label \

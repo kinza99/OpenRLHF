@@ -137,6 +137,7 @@ dmypy.json
 *.DS_Store
 ckpt/
 data/
+appworld_env/experiments/
 utils/
 wandb/
 models/
